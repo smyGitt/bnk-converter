@@ -7,6 +7,8 @@ import time
 import threading
 from pathlib import Path
 
+DEFAULT_MIN_FILE_SIZE = 4844
+
 class ProgressSpinner:
     """ASCII spinner for visual feedback"""
     def __init__(self):
@@ -23,7 +25,7 @@ class ProgressSpinner:
                 print(f"\r{message} {self.spinner_chars[self.idx % 4]}", end='', flush=True)
                 self.idx += 1
                 time.sleep(0.1)
-        self.spinner_thread = threading.Thread(target=spin)
+        self.spinner_thread = threading.Thread(target=spin, daemon=True)
         self.spinner_thread.start()
     
     def stop(self):
@@ -39,7 +41,7 @@ def get_resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
     except Exception:
-        base_path = Path(__file__).parent if hasattr(Path(__file__), 'parent') else Path(os.getcwd())
+        base_path = Path(__file__).parent
     return os.path.join(base_path, relative_path)
 
 def get_executable_dir():
@@ -47,15 +49,17 @@ def get_executable_dir():
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).parent
     else:
-        return Path(__file__).parent if hasattr(Path(__file__), 'parent') else Path(os.getcwd())
+        return Path(__file__).parent
 
 def run_command(cmd, verbosity=1):
-    """Execute shell command with verbosity control"""
+    """Execute a command (as an argument list) with verbosity control"""
     try:
         if verbosity == 3:
-            result = subprocess.run(cmd, shell=True, text=True)
+            result = subprocess.run(cmd, text=True)
         else:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0 and verbosity > 1 and result.stderr:
+            print(f"Error: {result.stderr.strip()}")
         return result.returncode == 0
     except Exception as e:
         if verbosity > 1:
@@ -66,7 +70,7 @@ def get_file_size(filepath):
     """Get file size in bytes"""
     try:
         return os.path.getsize(filepath)
-    except:
+    except OSError:
         return 0
 
 def get_choice(prompt, options, validator=None):
@@ -102,16 +106,16 @@ def get_cleanup_settings():
     cleanup_wem = get_choice("\nClean up .wem files after conversion?", 
                             {'1': 'Keep .wem files', '2': 'Delete .wem files'}) == '2'
     
-    delete_small = get_choice("\nDelete small output files?\nNote: Files smaller than 4844 bytes are usually empty/silent audio.", 
+    delete_small = get_choice(f"\nDelete small output files?\nNote: Files smaller than {DEFAULT_MIN_FILE_SIZE} bytes are usually empty/silent audio.",
                              {'1': 'Keep all output files', '2': 'Delete files smaller than specified size'}) == '2'
-    
+
     min_file_size = 0
     if delete_small:
-        size_input = input("\nEnter minimum file size in bytes (default: 4844): ").strip()
+        size_input = input(f"\nEnter minimum file size in bytes (default: {DEFAULT_MIN_FILE_SIZE}): ").strip()
         try:
-            min_file_size = int(size_input) if size_input else 4844
+            min_file_size = int(size_input) if size_input else DEFAULT_MIN_FILE_SIZE
         except ValueError:
-            min_file_size = 4844
+            min_file_size = DEFAULT_MIN_FILE_SIZE
     
     remove_duplicates = get_choice("\nRemove duplicate files by size?\nWARNING: This may remove unique files that happen to have the same size!", 
                                   {'1': 'Keep all files', '2': 'Remove files with identical file sizes'}) == '2'
@@ -177,15 +181,17 @@ def extract_bnk(bnk_file, temp_dir, bnkextr_path, verbosity):
     
     original_dir = os.getcwd()
     os.chdir(temp_dir)
-    
-    extract_cmd = f'"{bnkextr_path}" "{bnk_file.name}"'
-    success = run_command(extract_cmd, verbosity)
-    
-    if temp_bnk.exists():
-        temp_bnk.unlink()
-    os.chdir(original_dir)
-    spinner.stop()
-    
+
+    try:
+        extract_cmd = [str(bnkextr_path), bnk_file.name]
+        success = run_command(extract_cmd, verbosity)
+
+        if temp_bnk.exists():
+            temp_bnk.unlink()
+    finally:
+        os.chdir(original_dir)
+        spinner.stop()
+
     return success
 
 def should_delete_file(output_file, file_size, delete_small, min_file_size, remove_duplicates, file_sizes):
@@ -205,7 +211,8 @@ def convert_wem_files(temp_dir, output_dir, ext, vgmstream_path, verbosity, dele
         return False
     
     file_sizes = {}
-    
+    success_count = 0
+
     # Verbosity 1: Spinner only
     if verbosity == 1:
         spinner.start("[*] Converting files")
@@ -221,30 +228,31 @@ def convert_wem_files(temp_dir, output_dir, ext, vgmstream_path, verbosity, dele
         elif verbosity == 3:
             print(f"Processing file {count}/{len(wem_files)}: {wem_file.name}")
         
-        convert_cmd = f'"{vgmstream_path}" -o "{output_file}" "{wem_file}"'
+        convert_cmd = [str(vgmstream_path), "-o", str(output_file), str(wem_file)]
         convert_success = run_command(convert_cmd, verbosity)
-        
+
         if convert_success:
+            success_count += 1
             file_size = get_file_size(output_file)
             should_delete, reason = should_delete_file(output_file, file_size, delete_small, min_file_size, remove_duplicates, file_sizes)
-            
+
             if should_delete:
                 if verbosity == 3:
                     print(f"     Deleting {reason} file: {output_file.name} ({file_size} bytes)")
                 try:
                     output_file.unlink()
-                except:
+                except OSError:
                     pass
         elif verbosity == 3:
             print(f"     Failed to convert {wem_file.name}")
-    
+
     # Clean up output for verbosity 2
     if verbosity == 2:
         print()  # New line after progress counter
     elif verbosity == 1:
         spinner.stop()
-    
-    return True
+
+    return success_count > 0
 
 def cleanup_temp_dir(temp_dir, output_dir, cleanup_wem, verbosity):
     """Handle temp directory cleanup"""
@@ -256,12 +264,14 @@ def cleanup_temp_dir(temp_dir, output_dir, cleanup_wem, verbosity):
     else:
         if verbosity >= 2:
             print("[*] Moving .wem files to output directory...")
+        move_failed = False
         for wem_file in temp_dir.glob("*.wem"):
             try:
                 shutil.move(str(wem_file), str(output_dir))
-            except:
-                pass
-        if temp_dir.exists():
+            except (OSError, shutil.Error) as e:
+                move_failed = True
+                print(f"[WARNING] Could not move {wem_file.name}: {e}")
+        if not move_failed and temp_dir.exists():
             shutil.rmtree(temp_dir)
 
 def process_bnk_file(bnk_file, output_base_dir, ext, bnkextr_path, vgmstream_path, verbosity, cleanup_wem, delete_small, min_file_size, remove_duplicates):
@@ -272,35 +282,37 @@ def process_bnk_file(bnk_file, output_base_dir, ext, bnkextr_path, vgmstream_pat
     print(f"[*] Processing: {bnk_file.name}")
     print("=" * 40)
     
-    temp_dir = Path(f"temp_{basename}")
+    temp_dir = output_base_dir.parent / f"temp_{basename}"
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir()
-    
+
     file_output_dir = output_base_dir / basename
     file_output_dir.mkdir(exist_ok=True)
-    
+
+    cleanup_done = False
     try:
         if not extract_bnk(bnk_file, temp_dir, bnkextr_path, verbosity):
             print(f"[ERROR] Failed to extract {bnk_file.name}")
             return False
-        
+
         if not convert_wem_files(temp_dir, file_output_dir, ext, vgmstream_path, verbosity, delete_small, min_file_size, remove_duplicates):
-            print(f"[ERROR] No .wem files found after extraction of {bnk_file.name}")
+            print(f"[ERROR] No .wem files were successfully converted from {bnk_file.name}")
             return False
-        
+
         cleanup_temp_dir(temp_dir, file_output_dir, cleanup_wem, verbosity)
+        cleanup_done = True
         return True
-        
+
     except Exception as e:
         spinner.stop()
         print(f"[ERROR] Exception processing {bnk_file.name}: {e}")
         return False
     finally:
-        if temp_dir.exists():
+        if not cleanup_done and temp_dir.exists():
             try:
                 shutil.rmtree(temp_dir)
-            except:
+            except OSError:
                 pass
 
 def validate_tools():

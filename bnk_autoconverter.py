@@ -103,7 +103,7 @@ def get_verbosity():
 
 def get_cleanup_settings():
     """Get cleanup preferences"""
-    cleanup_wem = get_choice("\nClean up .wem files after conversion?", 
+    cleanup_wem = get_choice("\nClean up .wem files after conversion?\nNote: .wem files are the raw Wwise-encoded audio extracted from the .bnk before conversion to your chosen format.",
                             {'1': 'Keep .wem files', '2': 'Delete .wem files'}) == '2'
     
     delete_small = get_choice(f"\nDelete small output files?\nNote: Files smaller than {DEFAULT_MIN_FILE_SIZE} bytes are usually empty/silent audio.",

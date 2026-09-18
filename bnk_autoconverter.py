@@ -106,8 +106,8 @@ def get_cleanup_settings():
     cleanup_wem = get_choice("\nClean up .wem files after conversion?\nNote: .wem files are the raw Wwise-encoded audio extracted from the .bnk before conversion to your chosen format.",
                             {'1': 'Keep .wem files', '2': 'Delete .wem files'}) == '2'
     
-    delete_small = get_choice(f"\nDelete small output files?\nNote: Files smaller than {DEFAULT_MIN_FILE_SIZE} bytes are usually empty/silent audio.",
-                             {'1': 'Keep all output files', '2': 'Delete files smaller than specified size'}) == '2'
+    delete_small = get_choice(f"\nDelete small output files?\nNote: Files {DEFAULT_MIN_FILE_SIZE} bytes or smaller are usually empty/silent audio.",
+                             {'1': 'Keep all output files', '2': 'Delete files at or below specified size'}) == '2'
 
     min_file_size = 0
     if delete_small:
@@ -196,7 +196,7 @@ def extract_bnk(bnk_file, temp_dir, bnkextr_path, verbosity):
 
 def should_delete_file(output_file, file_size, delete_small, min_file_size, remove_duplicates, file_sizes):
     """Determine if file should be deleted based on settings"""
-    if delete_small and file_size < min_file_size:
+    if delete_small and file_size <= min_file_size:
         return True, "small"
     elif remove_duplicates and file_size in file_sizes:
         return True, "duplicate"

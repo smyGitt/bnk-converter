@@ -133,7 +133,7 @@ def find_bnk_files():
         input("Press Enter to exit...")
         sys.exit(1)
     
-    bnk_files = list(input_dir.glob("*.bnk"))
+    bnk_files = list(input_dir.rglob("*.bnk"))
     if not bnk_files:
         print(f"[ERROR] No .bnk files found in {input_dir}!")
         input("Press Enter to exit...")
@@ -274,10 +274,20 @@ def cleanup_temp_dir(temp_dir, output_dir, cleanup_wem, verbosity):
         if not move_failed and temp_dir.exists():
             shutil.rmtree(temp_dir)
 
-def process_bnk_file(bnk_file, output_base_dir, ext, bnkextr_path, vgmstream_path, verbosity, cleanup_wem, delete_small, min_file_size, remove_duplicates):
+def assign_unique_basenames(bnk_files):
+    """Assign collision-free basenames for .bnk files that share a stem across different subfolders"""
+    seen_counts = {}
+    result = []
+    for bnk_file in bnk_files:
+        stem = bnk_file.stem
+        count = seen_counts.get(stem, 0)
+        seen_counts[stem] = count + 1
+        basename = stem if count == 0 else f"{stem}_{count}"
+        result.append((bnk_file, basename))
+    return result
+
+def process_bnk_file(bnk_file, basename, output_base_dir, ext, bnkextr_path, vgmstream_path, verbosity, cleanup_wem, delete_small, min_file_size, remove_duplicates):
     """Process single .bnk file through complete pipeline"""
-    basename = bnk_file.stem
-    
     print("\n" + "=" * 40)
     print(f"[*] Processing: {bnk_file.name}")
     print("=" * 40)
@@ -349,15 +359,17 @@ def main():
     output_dir.mkdir(exist_ok=True)
     
     bnkextr_path, vgmstream_path = validate_tools()
-    
-    processed_files = [bnk_file for bnk_file in files_to_process 
-                      if process_bnk_file(bnk_file, output_dir, ext, bnkextr_path, vgmstream_path, 
+
+    files_with_basenames = assign_unique_basenames(files_to_process)
+
+    processed_files = [(bnk_file, basename) for bnk_file, basename in files_with_basenames
+                      if process_bnk_file(bnk_file, basename, output_dir, ext, bnkextr_path, vgmstream_path,
                                          verbosity, cleanup_wem, delete_small, min_file_size, remove_duplicates)]
-    
+
     print("\n" + "=" * 40)
     print("[*] All conversions completed!")
-    for bnk_file in processed_files:
-        print(f"[*] Output saved to: {output_dir}/{bnk_file.stem}/")
+    for bnk_file, basename in processed_files:
+        print(f"[*] Output saved to: {output_dir}/{basename}/")
     print("=" * 40)
     input("Press Enter to exit...")
 
